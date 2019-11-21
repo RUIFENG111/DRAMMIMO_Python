@@ -1,5 +1,5 @@
-# DRAMMIMO
-Delayed Rejection Adaptive Metropolis Multi Input Multi Output
+# DRAMMIMO_Python
+Delayed Rejection Adaptive Metropolis Multi Input Multi Output for Python
 
 This package utilizes a modified version of the Delayed Rejection Adaptive Metropolis (DRAM) algorithm to realize the Maximum Entropy (ME) method numerically. 
 
@@ -7,7 +7,7 @@ The original DRAM algorithm is based on the MATLAB toolbox from Dr. Marko J. Lai
 
 The Maximum Entropy method can be used for fusing data from hetergeneous sources and quantifying uncertainty of model parameters that are shared among models [2]. When only one set of data is available, the Maximum Entropy method automatically becomes the Bayesian method, and the algorithm is equivalent to the original DRAM algorithm.
 
-The package provides code for both MATLAB and Python environment at this point. C/C++ version will come in the future. Inside each version, there is currently only one simple linear model to demonstrate how to use the package. More complicated examples will be added in the future.
+The package provides code for Python environment. An equivalent version for MATLAB environment can be found at https://github.com/wgme/DRAMMIMO_MATLAB. Currently, there is only one simple linear model to demonstrate how to use the package; see DRAMMIMO.py for details. More complicated examples will be added in the future.
 
 [1] Ralph C Smith. Uncertainty quantification: theory, implementation, and applications, volume 12. Siam, 2013.
 
