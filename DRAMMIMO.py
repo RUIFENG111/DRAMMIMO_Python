@@ -1,26 +1,76 @@
-# By: Wei Gao (my14@my.fsu.edu)
-# Last Modified: 07/25/2019
+#############################################################
+# By: Wei Gao (wg14@my.fsu.edu)
+# Last modified: 11/28/2019
 # Description:
-# Delayed Rejection Adaptive Metropolis Multi Input Multi Output
-# 1. Based on the code from Dr. Marko Laine 
+# The code is based on
+# 1) the MATLAB toolbox from Dr. Marko Laine 
 #    (http://helios.fmi.fi/~lainema/mcmc/).
-# 2. Also based on the math from Dr. Ralph C. Smith 
-#    (Uncertainty Quantification: Theory, Implementation, and Applications).
+# 2) the book from Dr. Ralph C. Smith (Uncertainty 
+#    Quantification: Theory, Implementation, and Application).
+# V01: N/A.
+# V02a: This version can only generate estimation chains. 
+#       It was used for SMASIS 2018.
+# V02b: This version can also generate credible and 
+#       prediction intervals. 
+#       It was used for dissertation.
+# V03: This version can also generate posterior densities. 
+#      It has three major components: getDRAMMIMOChains(), 
+#      getDRAMMIMODensities(), and getDRAMMIMOIntervals().
+# V04a: An output "prior" was added to getDRAMMIMOChains(),
+#       containing parameters for inverse-wishart sampling.
+# V04b: Parameters determine the number of iterations for 
+#       displaying and saving results to command window and 
+#       data files, respectively, were added to DRAMParams.
+#       The structure of modelParams was modified to be more
+#       user-friendly.
+#       Some comments were added and some were editted.
+#       Some minor tweaks here and there.
+#############################################################
 
+"""
+Delayed Rejection Adaptive Metropolis Multi Input Multi Output
+
+@function getDRAMMIMOChains: return the estimation chains.
+@function getDRAMMIMODensities: return the posterior densities.
+@function getDRAMMIMOIntervals: return the credible and 
+                                 prediction intervals.
+@function getModelResponse: return model responses, for the 
+                            linear model example.
+@function getModelResponseError: return model response errors, 
+                                 for the linear model example.
+"""
+
+# Import libraries.
 import numpy as np
 import scipy.linalg as la
 import scipy.stats as st
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as mplot
 import matplotlib.patches as mpatch
 import matplotlib.lines as mline
 import os
 
 def getDRAMMIMOChains(data,model,modelParams,DRAMParams):
+    """
+    Return the estimation chains.
+
+    @param data: (dictionary) {'xdata', 'ydata'}.
+    @param model: (dictionary) {'fun', 'errFun'}.
+    @param modelParams: (dictionary) {'table', 'extra'}.
+    @param DRAMParams: (dictionary) {'numIterationsDone', 
+                                     'numIterationsExpected', 
+                                     'numIterationsDisplay', 
+                                     'numIterationsSave', 
+                                     'previousResults'}.
+    @return prior: (dictionary) {'psi_s', 'nu_s'}.
+    @return chain_q: (matrix).
+    @return last_cov_q: (matrix).
+    @return chain_cov_err: (matrix).
+    """
     ## Initialize parameters.
 
     # Number of data sets.
     numDataSets = np.array([len(data['xdata']),len(data['ydata']), \
-                            len(model['fun']),len(model['errFun']),len(model['ssFun']), \
+                            len(model['fun']),len(model['errFun']), \
                             len(modelParams['extra'])])
     if np.any(numDataSets-numDataSets[0]):
         raise ValueError('Unequal numbers of sets in either data or model.')
@@ -77,7 +127,7 @@ def getDRAMMIMOChains(data,model,modelParams,DRAMParams):
 
     # Initialize the covariance matrix of parameter estimation errors and its inverse.
     if Mo==1:
-        cov_err = np.diag((np.tile(1E-4,(1,N)))[0,:])
+        cov_err = np.dot(err.T,err)
     else:
         cov_err = DRAMParams['previousResults']['chain_cov_err'][-1,:,:]
     if N==1:
@@ -86,8 +136,16 @@ def getDRAMMIMOChains(data,model,modelParams,DRAMParams):
         cov_err_inv = la.inv(cov_err)
 
     # Parameters for inverse-wishart distribution.
-    psi_s = np.diag((np.tile(1E-4,(1,N)))[0,:])
-    nu_s = 1
+    if np.array_equal(DRAMParams['previousResults']['prior']['psi_s'],np.empty):
+        psi_s = np.zeros((N,N))
+        nu_s = 0.0
+    else:
+        psi_s = DRAMParams['previousResults']['prior']['psi_s']
+        if np.array_equal(DRAMParams['previousResults']['prior']['nu_s'],np.empty):
+            nu_s = 1.0
+        else:
+            nu_s = DRAMParams['previousResults']['prior']['nu_s']
+    prior = {'psi_s':psi_s, 'nu_s': nu_s}
 
     # Parameters for Adaptive Metropolis.
     # Adaptive interval.
@@ -140,10 +198,11 @@ def getDRAMMIMOChains(data,model,modelParams,DRAMParams):
         if np.mod(k,200)==0:
             print(np.vstack((k,q)).T)
         # Save current estimation chain every yth iteration.
-        # Modify the number in mod() after k+1 as needed.
+        # Modify the number in mod() after k as needed.
         # Comment this out if not necessary, i.e. to avoid time delay.
         if np.mod(k,1000)==0:
             np.savez_compressed(os.getcwd()+'/chains'+str(k), \
+                                prior=prior, \
                                 chain_q=chain_q, \
                                 last_cov_q=last_cov_q, \
                                 chain_cov_err=chain_cov_err)
@@ -155,7 +214,7 @@ def getDRAMMIMOChains(data,model,modelParams,DRAMParams):
         err0 = err.copy()
 
         # 1st stage Random Walk.
-        q1 = q0+np.array([np.dot(R1.T,np.random.randn(len(q)))]).T # Laine
+        q1 = q0+np.array([np.dot(R1.T,np.random.randn(len(q)))]).T
         
         if any(q1.T[0,:]<modelParams['lowerLimits']) or any(q1.T[0,:]>modelParams['upperLimits']):
             # If the new guess is out of the bounds ...
@@ -197,8 +256,7 @@ def getDRAMMIMOChains(data,model,modelParams,DRAMParams):
             # Reject the 1st stage new guess.
 
             # 2nd stage Random Walk.
-            # q2 = q0+np.array([np.dot(R2,np.random.randn(len(q)))]).T # Smith
-            q2 = q0+np.array([np.dot(R2.T,np.random.randn(len(q)))]).T # Laine
+            q2 = q0+np.array([np.dot(R2.T,np.random.randn(len(q)))]).T
 
             if any(q2.T[0,:]<modelParams['lowerLimits']) or any(q2.T[0,:]>modelParams['upperLimits']):
                 # If the new guess is out of the bounds ...
@@ -294,9 +352,23 @@ def getDRAMMIMOChains(data,model,modelParams,DRAMParams):
 
         ######## End of Adaptive Metropolis ########
 
-    return chain_q,last_cov_q,chain_cov_err
+    np.savez_compressed(os.getcwd()+'/chains', \
+                        prior=prior, \
+                        chain_q=chain_q, \
+                        last_cov_q=last_cov_q, \
+                        chain_cov_err=chain_cov_err)
+
+    return prior,chain_q,last_cov_q,chain_cov_err
 
 def getDRAMMIMODensities(qChain):
+    """
+    Return the posterior densities.
+
+    @param qChain: (matrix).
+    @return qVals: (vector).
+    @return qProbs: (vector).
+    """
+
     numIterations = qChain.shape[0]
     numChains = qChain.shape[1]
     numNodes = 100
@@ -327,9 +399,26 @@ def getDRAMMIMODensities(qChain):
             err = (qVals[j,i]-qChain[:,i])/s
             qProbs[j,i] = 1.0/numIterations*np.sum(np.exp(-0.5*np.power(err,2))/np.sqrt(2*np.pi))/s
 
+    np.savez_compressed(os.getcwd()+'/densities', \
+                        qVals=qVals, \
+                        qProbs=qProbs)
+
     return qVals,qProbs
 
 def getDRAMMIMOIntervals(data,model,modelParams,chain_q,chain_cov_err,nSample):
+    """
+    Return the credible and prediction intervals.
+
+    @param data: (dictionary) {'xdata', 'ydata'}.
+    @param model: (dictionary) {'fun', 'errFun'}.
+    @param modelParams: (dictionary) {'table', 'extra'}.
+    @param chain_q: (matrix).
+    @param chain_cov_err: (matrix).
+    @param nSample: (scalar).
+    @return credLims: (matrix).
+    @return predLims: (matrix).
+    """
+
     # Initialize parameters. Using 95% intervals.
     xData = data['xdata']
     lims = [0.025, 0.5, 0.975]
@@ -364,6 +453,10 @@ def getDRAMMIMOIntervals(data,model,modelParams,chain_q,chain_cov_err,nSample):
             credLims[i,:,j] = np.interp(np.array(lims)*(nSample-1),np.arange(nSample),ySaveSorted[:,j])
             predLims[i,:,j] = np.interp(np.array(lims)*(nSample-1),np.arange(nSample),oSaveSorted[:,j])
 
+    np.savez_compressed(os.getcwd()+'/intervals', \
+                        credLims=credLims, \
+                        predLims=predLims)
+
     return credLims,predLims
 
 def getModelResponse(theta,xdata,extra):
@@ -388,40 +481,32 @@ def getModelResponseError(theta,xdata,ydata,extra):
 
     return modelResponseError
 
-def getModelResponseSS(theta,xdata,ydata,extra):
-    modelResponseError = getModelResponseError(theta,xdata,ydata,extra)
-    modelResponseSS = np.sum(modelResponseError*modelResponseError)
-
-    return modelResponseSS
-    
-
 # This is the main function if the this module is executed by itself.
 if __name__ == '__main__':
-    ## Below is an example of how to use DRAMMIMO.
+    # Below is an example of how to use DRAMMIMO.
 
     # Load the data.
     print('Loading data...')
-    # Fictitious data are generated here for a linear model y = a*x + b.
+    # Ficticious data are generated here for a linear model y = a*x + b.
     # Two data sets are available.
     inputData1 = np.array([np.linspace(0,1,101)]).T
     inputData2 = np.array([np.linspace(0,1,101)]).T
-    outputData1 = 0.8*inputData1+0.05*np.array([np.random.randn(101)]).T
-    outputData2 = 1.2*inputData2+0.15*np.array([np.random.randn(101)]).T
+    outputData1 = 0.8*inputData1*(1+0.05*np.array([np.random.randn(101)]).T)
+    outputData2 = 1.2*inputData2*(1+0.10*np.array([np.random.randn(101)]).T)
 
     # Set up DRAMMIMO.
     print('Setting DRAMMIMO...')
     # Scenarios with one ro two data sets are differentiated by mode.
-    # mode = 1: using one data set (Bayesian method).
+    # mode = 1: using one data set (essentially Bayesian method).
     # mode = 2: using two data sets (Maximum Entropy method).
     mode = 2
     if mode==1:
         data = {'xdata':[inputData1], \
                 'ydata':[outputData1]}
         model = {'fun':[getModelResponse], \
-                 'errFun':[getModelResponseError], \
-                 'ssFun':[getModelResponseSS]}
+                 'errFun':[getModelResponseError]}
         modelParams = {'names':['a','b'],\
-                       'values':[1,0], \
+                       'values':[1.0,0.01], \
                        'lowerLimits':[-float('inf'),-float('inf')], \
                        'upperLimits':[float('inf'),float('inf')], \
                        'extra':[[0,]]}
@@ -429,117 +514,96 @@ if __name__ == '__main__':
         data = {'xdata':[inputData1,inputData2], \
                 'ydata':[outputData1,outputData2]}
         model = {'fun':[getModelResponse,getModelResponse], \
-                 'errFun':[getModelResponseError,getModelResponseError], \
-                 'ssFun':[getModelResponseSS,getModelResponseSS]}
+                 'errFun':[getModelResponseError,getModelResponseError]}
         modelParams = {'names':['a','b'],\
-                       'values':[1,0], \
+                       'values':[1.0,0.01], \
                        'lowerLimits':[-float('inf'),-float('inf')], \
                        'upperLimits':[float('inf'),float('inf')], \
                        'extra':[[0,],[0,]]}
 
     # Get estimation chains.
-    # The estimation chains can be obtained ini multiple consecutive runs.
+    # The estimation chains can be obtained in multiple runs.
     # 1st round.
-    numDone = 1
-    numTotal = 5000
-    DRAMParams = {'numDRAMIterationsDone':numDone, \
-                  'numDRAMIterations':numTotal, \
-                  'previousResults': {'chain_q':[], \
-                                      'last_cov_q':[], \
-                                      'chain_cov_err':[]}}
-    print('Running DRAMMIMO...')
-    chain_q,last_cov_q,chain_cov_err = getDRAMMIMOChains(data,model,modelParams,DRAMParams)
-    print('Finished.')
+    DRAMParams = {'numDRAMIterationsDone':1, \
+                  'numDRAMIterations':5000, \
+                  'previousResults': {'prior':{'psi_s':np.empty,'nu_s':np.empty}, \
+                                      'chain_q':np.empty, \
+                                      'last_cov_q':np.empty, \
+                                      'chain_cov_err':np.empty}}   
+    prior,chain_q,last_cov_q,chain_cov_err = getDRAMMIMOChains(data,model,modelParams,DRAMParams)
     # 2nd round.
-    numDone = numTotal
-    numTotal = 10000
-    DRAMParams = {'numDRAMIterationsDone':numDone, \
-                  'numDRAMIterations':numTotal, \
-                  'previousResults': {'chain_q':chain_q, \
+    DRAMParams = {'numDRAMIterationsDone':5000, \
+                  'numDRAMIterations':10000, \
+                  'previousResults': {'prior':prior, \
+                                      'chain_q':chain_q, \
                                       'last_cov_q':last_cov_q, \
                                       'chain_cov_err':chain_cov_err}}
-    print('Running DRAMMIMO...')
-    chain_q,last_cov_q,chain_cov_err = getDRAMMIMOChains(data,model,modelParams,DRAMParams)
-    print('Finished.')
-
-    np.savez_compressed(os.getcwd()+'/chains'+str(numTotal), \
-                        chain_q=chain_q, \
-                        last_cov_q=last_cov_q, \
-                        chain_cov_err=chain_cov_err)
-
+    prior,chain_q,last_cov_q,chain_cov_err = getDRAMMIMOChains(data,model,modelParams,DRAMParams)
+    
     # Get posterior densities.
     num = round(chain_q.shape[0]/2.0)
     vals,probs = getDRAMMIMODensities(chain_q[num:,:])
-    
-    np.savez_compressed(os.getcwd()+'/densities'+str(numTotal), \
-                        vals=vals, \
-                        probs=probs)
 
     # Get credible and prediction intervals.
     nSample = 500
-    credLims,predLims = getDRAMMIMOIntervals(data,model,modelParams,chain_q,chain_cov_err,nSample)
-    
-    np.savez_compressed(os.getcwd()+'/intervals'+str(numTotal), \
-                        credLims=credLims, \
-                        predLims=predLims)
+    credLims,predLims = getDRAMMIMOIntervals(data,model,modelParams,chain_q[num:,:],chain_cov_err[num:,:,:],nSample)
 
-    ## Plot the results.    
+    print('Mean Parameter Estimation = ')
+    print(np.mean(chain_q[num:,:],axis=0))
+
+    # Plot the results.    
     print('Plotting results...')
 
     figNum = 0
 
-    # Data.
     figNum += 1
-    plt.figure(figNum,figsize=(10,6))
-    plt.plot(inputData1,outputData1,'bo',markerfacecolor='None',label='Data I')
-    plt.plot(inputData2,outputData2,'ro',markerfacecolor='None',label='Data II')
-    plt.xlabel('$x$',fontsize=18)
-    plt.ylabel('$y$',fontsize=18)
-    plt.xlim(0,1)
-    plt.ylim(-0.1,1.3)
-    plt.xticks(fontsize=18)
-    plt.yticks(fontsize=18)
-    plt.legend(loc='upper left',fontsize=18,frameon=False)
+    mplot.figure(figNum,figsize=(10,6))
+    mplot.plot(inputData1,outputData1,'bo',markerfacecolor='None',label='Data I')
+    mplot.plot(inputData2,outputData2,'ro',markerfacecolor='None',label='Data II')
+    mplot.xlabel('$x$',fontsize=18)
+    mplot.ylabel('$y$',fontsize=18)
+    mplot.xlim(0,1)
+    mplot.ylim(-0.1,1.3)
+    mplot.xticks(fontsize=18)
+    mplot.yticks(fontsize=18)
+    mplot.legend(loc='upper left',fontsize=18,frameon=False)
 
-    # Estimation chains.
     figNum += 1
-    plt.figure(figNum,figsize=(10,6))
-    plt.subplot(2,1,1)
-    plt.plot(np.arange(1,chain_q.shape[0]+1,1),chain_q[:,0],'.')
-    plt.xticks([])
-    plt.yticks(fontsize=18)
-    plt.ylabel('$a$',fontsize=18)
-    plt.xlim(0,chain_q.shape[0])
-    plt.ylim(np.min(chain_q[:,0]),np.max(chain_q[:,0]))
-    plt.subplot(2,1,2)
-    plt.plot(np.arange(1,chain_q.shape[0]+1,1),chain_q[:,1],'.')
-    plt.xticks([])
-    plt.yticks(fontsize=18)
-    plt.xlabel('Iterations',fontsize=18)
-    plt.ylabel('$b$',fontsize=18)
-    plt.xlim(0,chain_q.shape[0])
-    plt.ylim(np.min(chain_q[:,1]),np.max(chain_q[:,1]))
+    mplot.figure(figNum,figsize=(10,6))
+    mplot.subplot(2,1,1)
+    mplot.plot(np.arange(1,chain_q.shape[0]+1,1),chain_q[:,0],'.')
+    mplot.xticks([])
+    mplot.ylabel('$a$',fontsize=18)
+    mplot.xlim(0,chain_q.shape[0])
+    mplot.ylim(np.min(chain_q[:,0]),np.max(chain_q[:,0]))
+    mplot.yticks(fontsize=18)
+    mplot.subplot(2,1,2)
+    mplot.plot(np.arange(1,chain_q.shape[0]+1,1),chain_q[:,1],'.')
+    mplot.xticks([])
+    mplot.xlabel('Iterations',fontsize=18)
+    mplot.ylabel('$b$',fontsize=18)
+    mplot.xlim(0,chain_q.shape[0])
+    mplot.ylim(np.min(chain_q[:,1]),np.max(chain_q[:,1]))
+    mplot.yticks(fontsize=18)
 
-    # Posterior densities.
     figNum += 1
-    plt.figure(figNum,figsize=(10,6))
-    plt.subplot(1,2,1)
-    plt.plot(vals[:,0],probs[:,0],'k',linewidth=3)
-    plt.xlabel('$a$',fontsize=18)
-    plt.xlim(np.min(vals[:,0]),np.max(vals[:,0]))
-    # plt.xticks(fontsize=18)
-    plt.yticks([])
-    plt.ylabel('Posterior Density',fontsize=18)
-    plt.subplot(1,2,2)
-    plt.plot(vals[:,1],probs[:,1],'k',linewidth=3)
-    plt.xlabel('$b$',fontsize=18)
-    plt.xlim(np.min(vals[:,1]),np.max(vals[:,1]))
-    # plt.xticks(fontsize=18)
-    plt.yticks([])
+    mplot.figure(figNum,figsize=(10,6))
+    mplot.subplot(1,2,1)
+    mplot.plot(vals[:,0],probs[:,0],'k',linewidth=3)
+    mplot.xlabel('$a$',fontsize=18)
+    mplot.xlim(np.min(vals[:,0]),np.max(vals[:,0]))
+    mplot.xticks(fontsize=18)
+    mplot.yticks([])
+    mplot.ylabel('Posterior Density',fontsize=18)
+    mplot.subplot(1,2,2)
+    mplot.plot(vals[:,1],probs[:,1],'k',linewidth=3)
+    mplot.xlabel('$b$',fontsize=18)
+    mplot.xlim(np.min(vals[:,1]),np.max(vals[:,1]))
+    mplot.xticks(fontsize=18)
+    mplot.yticks([])
 
-    # Credible and prediction intervals for data set I.
     figNum += 1
-    fig, ax = plt.subplots(figsize=(10,6))
+    fig, ax = mplot.subplots(figsize=(10,6))
     limitX = np.vstack((inputData1,np.flip(inputData1,axis=0)))
     predLimitY = np.vstack((np.array([predLims[0,0,:]]).T,np.array(np.fliplr([predLims[0,2,:]])).T))
     predLimits = mpatch.Polygon(np.hstack((limitX,predLimitY)),facecolor=(1,0.75,0.5))
@@ -547,24 +611,23 @@ if __name__ == '__main__':
     credLimitY = np.vstack((np.array([credLims[0,0,:]]).T,np.array(np.fliplr([credLims[0,2,:]])).T))
     credLimits = mpatch.Polygon(np.hstack((limitX,credLimitY)),facecolor=(0.75,1,0.5))
     ax.add_patch(credLimits)
-    plt.plot(inputData1,credLims[0,1,:],'k')
-    plt.plot(inputData1,outputData1,'bo',markerfacecolor='None')
-    plt.xlabel('$x$',fontsize=18)
-    plt.ylabel('$y_1$',fontsize=18)
-    plt.xlim(0,1)
-    plt.ylim(-0.7,2)
-    plt.xticks(fontsize=18)
-    plt.yticks(fontsize=18)
+    mplot.plot(inputData1,credLims[0,1,:],'k')
+    mplot.plot(inputData1,outputData1,'bo',markerfacecolor='None')
+    mplot.xlabel('$x$',fontsize=18)
+    mplot.ylabel('$y_1$',fontsize=18)
+    mplot.xlim(0,1)
+    mplot.ylim(-0.7,2)
+    mplot.xticks(fontsize=18)
+    mplot.yticks(fontsize=18)
     lgd = [mpatch.Patch(facecolor=(1,0.75,0.5),edgecolor='None',label='95% Pred Interval'), \
            mpatch.Patch(facecolor=(0.75,1,0.5),edgecolor='None',label='95% Cred Interval'), \
            mline.Line2D([0],[0],color='k',label='Model'), \
            mline.Line2D([0],[0],marker='o',color='None',markerfacecolor='None',markeredgecolor='b',label='Data I')]
-    plt.legend(handles=lgd,loc='upper left',fontsize=18,frameon=False)
+    mplot.legend(handles=lgd,loc='upper left',fontsize=18,frameon=False)
 
-    # Credible and prediction intervals for data set II.
     if mode==2:
         figNum += 1
-        fig, ax = plt.subplots(figsize=(10,6))
+        fig, ax = mplot.subplots(figsize=(10,6))
         limitX = np.vstack((inputData2,np.flip(inputData2,axis=0)))
         predLimitY = np.vstack((np.array([predLims[1,0,:]]).T,np.array(np.fliplr([predLims[1,2,:]])).T))
         predLimits = mpatch.Polygon(np.hstack((limitX,predLimitY)),facecolor=(1,0.75,0.5))
@@ -572,19 +635,18 @@ if __name__ == '__main__':
         credLimitY = np.vstack((np.array([credLims[1,0,:]]).T,np.array(np.fliplr([credLims[1,2,:]])).T))
         credLimits = mpatch.Polygon(np.hstack((limitX,credLimitY)),facecolor=(0.75,1,0.5))
         ax.add_patch(credLimits)
-        plt.plot(inputData2,credLims[1,1,:],'k')
-        plt.plot(inputData2,outputData2,'ro',markerfacecolor='None')
-        plt.xlabel('$x$',fontsize=18)
-        plt.ylabel('$y_2$',fontsize=18)
-        plt.xlim(0,1)
-        plt.ylim(-0.7,2)
-        plt.xticks(fontsize=18)
-        plt.yticks(fontsize=18)
+        mplot.plot(inputData2,credLims[1,1,:],'k')
+        mplot.plot(inputData2,outputData2,'ro',markerfacecolor='None')
+        mplot.xlabel('$x$',fontsize=18)
+        mplot.ylabel('$y_2$',fontsize=18)
+        mplot.xlim(0,1)
+        mplot.ylim(-0.7,2)
+        mplot.xticks(fontsize=18)
+        mplot.yticks(fontsize=18)
         lgd = [mpatch.Patch(facecolor=(1,0.75,0.5),edgecolor='None',label='95% Pred Interval'), \
                mpatch.Patch(facecolor=(0.75,1,0.5),edgecolor='None',label='95% Cred Interval'), \
                mline.Line2D([0],[0],color='k',label='Model'), \
                mline.Line2D([0],[0],marker='o',color='None',markerfacecolor='None',markeredgecolor='r',label='Data II')]
-        plt.legend(handles=lgd,loc='upper left',fontsize=18,frameon=False)
+        mplot.legend(handles=lgd,loc='upper left',fontsize=18,frameon=False)
 
-    # Show plots.
-    plt.show()
+    mplot.show()
